@@ -1,0 +1,16 @@
+# Node.js dependencies
+node_modules/
+app.js
+temporarybakwas.js
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# Operating system files
+.DS_Store
+
+# Coverage and build output
+coverage/
+dist/
