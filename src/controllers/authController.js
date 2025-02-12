@@ -1,6 +1,6 @@
-const supabase = require('../config/supabaseClient');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const User = require('../models/userModel');
 
 // User Registration Function
 const registerUser = async (req, res) => {
@@ -12,12 +12,7 @@ const registerUser = async (req, res) => {
 
   try {
     // Check if user already exists
-    const { data: existingUsers, error: fetchError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', email);
-
-    if (fetchError) throw fetchError;
+    const existingUsers = await User.findAll({ where: { email } });
     if (existingUsers && existingUsers.length > 0) {
       return res.status(400).json({ error: 'User already exists' });
     }
@@ -26,14 +21,15 @@ const registerUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Insert new user (default role: user)
-    const { data, error } = await supabase
-      .from('users')
-      .insert([{ username, email, password: hashedPassword, role: 'user' }])
-      .select(); // Ensure it returns inserted data
+    // Note: Our model uses 'name' as the field, so we pass username as the name.
+    const newUser = await User.create({
+      name: username,
+      email,
+      password: hashedPassword,
+      role: 'user'
+    });
 
-    if (error) throw error;
-
-    res.status(201).json({ message: 'User registered successfully', user: data[0] });
+    res.status(201).json({ message: 'User registered successfully', user: newUser });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -49,12 +45,7 @@ const loginUser = async (req, res) => {
 
   try {
     // Fetch user from the database
-    const { data: users, error: fetchError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', email);
-
-    if (fetchError) throw fetchError;
+    const users = await User.findAll({ where: { email } });
     if (!users || users.length === 0) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -68,9 +59,9 @@ const loginUser = async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    // Generate JWT token
+    // Generate JWT token using the explicit primary key (userId)
     const token = jwt.sign(
-      { id: user.id, role: user.role },
+      { id: user.userId, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );

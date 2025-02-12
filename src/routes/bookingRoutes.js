@@ -6,6 +6,8 @@ const bookingController = require('../controllers/bookingController');
 const authorize = require('../middleware/authMiddleware');
 
 // Protected endpoint: Book a seat
+// Resolved this issue
+// there is an issue because we have defined the userId and trainId as a long integear value.
 router.post('/', authorize, bookingController.bookSeat);
 
 // Protected endpoint: Get specific booking details

@@ -1,56 +1,99 @@
-// src/controllers/bookingController.js
-const supabase = require('../config/supabaseClient');
+const { sequelize } = require('../config/database.js');
+const Booking = require('../models/bookingModel');
+const Train = require('../models/trainModel');
 
+// Book Seat Function
 const bookSeat = async (req, res) => {
-  const { train_id, user_id } = req.body;
-  if (!train_id || !user_id) {
-    return res.status(400).json({ error: 'Train ID and User ID are required' });
+  // Expecting trainId in the request body
+  const { trainId } = req.body;
+
+
+  // Assuming req.user is set by auth middleware and contains userId
+  const userId = req.user.id;
+  console.log(userId);
+
+
+  if (!trainId) {
+    return res.status(400).json({ message: "Missing required field: trainId" });
   }
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized: User not logged in" });
+  }
+
   try {
-    // Check current seat availability
-    const { data: trainData, error: trainError } = await supabase
-      .from('trains')
-      .select('*')
-      .eq('id', train_id)
-      .single();
-    if (trainError) throw trainError;
-    if (trainData.available_seats <= 0) {
-      return res.status(400).json({ error: 'No seats available' });
+    // Find the train by its primary key (trainId)
+    const train = await Train.findByPk(trainId);
+    if (!train) {
+      return res.status(404).json({ message: "Train not found" });
     }
-    // Atomically update available seats (optimistic concurrency control)
-    const { data: updatedTrain, error: updateError } = await supabase
-      .from('trains')
-      .update({ available_seats: trainData.available_seats - 1 })
-      .eq('id', train_id)
-      .gt('available_seats', 0);
-    if (updateError) throw updateError;
-    if (!updatedTrain || updatedTrain.length === 0) {
-      return res.status(400).json({ error: 'Booking failed due to race condition. Please try again.' });
+    if (train.availableSeats <= 0) {
+      return res.status(400).json({ message: "No seats available" });
     }
-    // Create a booking record (using .select() to return inserted data)
-    const { data: bookingData, error: bookingError } = await supabase
-      .from('bookings')
-      .insert([{ train_id, user_id }])
-      .select();
-    if (bookingError) throw bookingError;
-    res.status(201).json({ message: 'Seat booked successfully', booking: bookingData[0] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+
+    // Use a transaction to ensure atomicity of the booking process
+    try {
+      await sequelize.transaction(async (t) => {
+        // Lock the train row for update within the transaction
+        const updatedTrain = await Train.findByPk(trainId, {
+          transaction: t,
+          lock: t.LOCK.UPDATE,
+        });
+        if (!updatedTrain || updatedTrain.availableSeats <= 0) {
+          throw new Error("Race Condition: No seats left");
+        }
+
+        // Decrement availableSeats by one
+        await updatedTrain.update(
+          { availableSeats: updatedTrain.availableSeats - 1 },
+          { transaction: t }
+        );
+
+        // Create a new booking record with status 'confirmed'
+        await Booking.create(
+          { userId, trainId, status: 'confirmed' },
+          { transaction: t }
+        );
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('deadlock')) {
+        return res.status(409).json({ message: "Please try again" });
+      }
+      throw error;
+    }
+
+    res.json({ message: "Booking successful" });
+  } catch (error) {
+    console.error("Error booking train:", error.message);
+    if (error.message === "Race Condition: No seats left") {
+      return res.status(400).json({ message: error.message });
+    }
+    res.status(500).json({ message: "An error occurred during booking" });
   }
 };
 
+// Get Booking Function
 const getBooking = async (req, res) => {
-  const { bookingId } = req.params;
+  // Expecting bookingId as a URL parameter
+  const { id: bookingId } = req.params;
+  const userId = req.user.id;
+
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized: User not logged in" });
+  }
+
   try {
-    const { data, error } = await supabase
-      .from('bookings')
-      .select('*')
-      .eq('id', bookingId)
-      .single();
-    if (error) throw error;
-    res.json({ booking: data });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    // Find a seat booking that matches the bookingId and belongs to the logged-in user; include the related Train details
+    const booking = await Booking.findOne({
+      where: { bookingId, userId },
+      include: Train,
+    });
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+    res.json({ booking });
+  } catch (error) {
+    console.error("Error fetching booking:", error.message);
+    res.status(500).json({ message: "Error fetching booking" });
   }
 };
 
